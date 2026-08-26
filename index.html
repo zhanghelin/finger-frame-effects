@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>指尖转场</title>
+  <link rel="stylesheet" href="/src/style.css">
+  <link rel="preload" href="vendor/hand_landmarker.task" as="fetch" crossorigin>
+</head>
+<body>
+  <!-- 状态遮罩（加载模型） -->
+  <div id="status-overlay">
+    <div class="badge"><div class="spinner"></div></div>
+    <div id="status-text">正在初始化…</div>
+    <div id="status-sub"></div>
+    <div id="progress-wrap">
+      <div id="progress-bar"><div id="progress-fill"></div></div>
+      <div id="progress-pct">0%</div>
+    </div>
+  </div>
+
+  <!-- ===== 录制页 ===== -->
+  <div id="record-view">
+    <div class="topbar">
+      <div class="logo"></div>
+      <span class="title">指尖转场</span>
+      <span class="subtitle">录制片段</span>
+    </div>
+    <div id="record-stage">
+      <canvas id="display-canvas"></canvas>
+      <canvas id="raw-canvas" class="hidden"></canvas>
+      <canvas id="green-canvas" class="hidden"></canvas>
+      <video id="cam-video" playsinline></video>
+      <div id="record-hint">伸出双手，拇指与食指构成取景框</div>
+      <div id="countdown-overlay" class="hidden"><span id="countdown-num"></span></div>
+    </div>
+    <div id="bg-music-bar">
+      <span>背景音</span>
+      <select id="bg-music-select"></select>
+    </div>
+    <div id="record-controls">
+      <div id="rec-dot"></div>
+      <button id="record-btn" class="btn btn-primary">开始录制</button>
+      <button id="upload-btn" class="btn btn-ghost">上传视频</button>
+      <button id="edit-btn" class="btn btn-ghost hidden">进入编辑器</button>
+      <input type="file" id="upload-input" accept="video/*" hidden>
+    </div>
+    <div id="clips-strip"></div>
+  </div>
+
+  <!-- ===== 编辑器页 ===== -->
+  <div id="editor-view" class="hidden">
+    <div class="topbar">
+      <div class="logo"></div>
+      <span class="title">指尖转场 · 编辑器</span>
+      <button id="back-btn" class="btn btn-ghost">返回录制</button>
+      <div class="export-dropdown">
+        <button id="export-clip-btn" class="btn btn-primary export-btn">导出视频 ▾</button>
+        <div id="export-menu" class="export-menu hidden">
+          <button class="export-option" data-type="green">带绿幕视频</button>
+          <button class="export-option" data-type="ai">AI 转绘视频</button>
+          <button class="export-option" data-type="composite">特效合成视频</button>
+        </div>
+      </div>
+    </div>
+    <div id="editor-main">
+      <div id="preview-panel">
+        <canvas id="preview-canvas"></canvas>
+        <video id="preview-raw-video" muted playsinline></video>
+        <video id="preview-green-video" muted playsinline></video>
+        <div id="playback-bar-wrap">
+          <button id="play-pause-btn"><span class="icon-play"></span></button>
+          <span id="playback-time">0:00.0</span>
+          <div id="playback-bar"><div id="playback-fill"></div></div>
+          <span id="playback-duration">0:00.0</span>
+        </div>
+        <div id="segment-track">
+          <div class="seg-track-hint">拖拽色块边缘调整时长 · 拖拽中间移动位置 · 点击进度条跳转 · ←→键逐帧</div>
+          <div id="segment-track-bar"></div>
+        </div>
+      </div>
+      <div id="effect-panel">
+        <div class="panel-section">
+          <div class="panel-label">特效段</div>
+          <div id="segment-list"></div>
+          <button id="add-segment-btn" class="btn btn-ghost add-seg-btn">+ 在当前位置添加特效段</button>
+        </div>
+        <div id="segment-edit" class="panel-section hidden">
+          <div class="effect-type-tabs">
+            <button data-type="none" class="active">无特效</button>
+            <button data-type="filter">滤镜特效</button>
+            <button data-type="restyle">AI转绘</button>
+          </div>
+          <div id="effect-grid" class="effect-grid hidden"></div>
+          <div id="restyle-section" class="hidden">
+            <div class="rh-api-label-row">
+              <label class="rh-api-label" for="rh-api-key">填写秘钥</label>
+              <a href="https://www.runninghub.cn/enterprise-api/consumerApi?inviteCode=rh-v1114" target="_blank" class="rh-get-key-link">去获取秘钥</a>
+            </div>
+            <!-- 本地开发模式：填写 Key 后走本地 RH 代理；平台版无需填写（服务端鉴权） -->
+            <input id="rh-api-key" class="rh-api-key" type="password" placeholder="本地开发模式填写，平台版无需">
+            <div class="rh-api-hint">
+              <span>新用户注册可获取1000点RH币，每天登录还可以送100点RH币。约可生成10个视频。</span>
+            </div>
+            <!-- 步骤1: 生成风格图片 -->
+            <div class="restyle-step">
+              <div class="restyle-step-label">步骤 1：生成风格图片 <span class="restyle-time-hint">预计需要 1 分钟</span></div>
+              <select id="restyle-style" class="restyle-style"></select>
+              <div class="restyle-frame-hint">将使用选中特效段的首帧作为关键帧</div>
+              <button id="restyle-gen-image" class="restyle-btn">生成风格图片</button>
+              <div id="restyle-img-progress" class="restyle-progress hidden">
+                <div class="restyle-progress-bar"><div id="restyle-img-fill" class="restyle-progress-fill"></div></div>
+                <div id="restyle-img-text" class="restyle-progress-text">准备中...</div>
+              </div>
+              <img id="restyle-preview" class="restyle-preview hidden">
+              <div id="restyle-img-history" class="restyle-history hidden"></div>
+            </div>
+            <!-- 步骤2: 生成转绘视频 -->
+            <div class="restyle-step">
+              <div class="restyle-step-label">步骤 2：生成转绘视频 <span class="restyle-time-hint">预计需要 5 分钟</span></div>
+              <button id="restyle-gen-video" class="restyle-btn" disabled>生成转绘视频</button>
+              <div id="restyle-vid-progress" class="restyle-progress hidden">
+                <div class="restyle-progress-bar"><div id="restyle-vid-fill" class="restyle-progress-fill"></div></div>
+                <div id="restyle-vid-text" class="restyle-progress-text">准备中...</div>
+              </div>
+              <video id="restyle-video-preview" class="restyle-preview hidden" muted controls></video>
+              <div id="restyle-vid-history" class="restyle-history hidden"></div>
+            </div>
+            <!-- 步骤3: 应用为特效 -->
+            <div class="restyle-step">
+              <div class="restyle-step-label">步骤 3：应用为特效</div>
+              <button id="restyle-apply" class="restyle-btn" disabled>应用到特效段</button>
+              <div class="restyle-hint">将转绘视频作为框内特效源</div>
+            </div>
+          </div>
+        </div>
+        <div id="segment-mode" class="panel-section hidden">
+          <div class="panel-label">模式</div>
+          <div id="mode-toggle" class="mode-toggle">
+            <button data-mode="normal" class="active">正常（框内）</button>
+            <button data-mode="inverted">反转（框外）</button>
+          </div>
+        </div>
+        <div id="segment-time" class="panel-section hidden">
+          <div class="panel-label">时间范围（秒）</div>
+          <div class="seg-time-inputs">
+            <input id="seg-start" type="number" step="0.1" min="0">
+            <span>—</span>
+            <input id="seg-end" type="number" step="0.1" min="0">
+          </div>
+          <button id="del-segment-btn" class="btn btn-ghost del-btn">删除此特效段</button>
+        </div>
+      </div>
+    </div>
+    <div id="timeline-panel">
+      <div id="timeline-toolbar">
+        <span class="panel-label">时间轴</span>
+      </div>
+      <div id="timeline-track"></div>
+    </div>
+  </div>
+
+  <!-- 灯箱（点击放大查看图片/视频） -->
+  <div id="lightbox" class="lightbox hidden">
+    <div class="lightbox-backdrop"></div>
+    <div class="lightbox-close">✕</div>
+    <div id="lightbox-content" class="lightbox-content"></div>
+  </div>
+
+  <script type="module" src="/src/app.js"></script>
+</body>
+</html>

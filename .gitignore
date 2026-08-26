@@ -1,0 +1,19 @@
+# 系统与运行时产物
+.DS_Store
+server.log
+vite.log
+__pycache__/
+*.pyc
+
+# Node / Vite
+node_modules/
+dist/
+
+# 本地大文件（不参与部署）
+/*.mp4
+downloads/
+
+# 与本项目无关的文档/脚本
+paper_text.txt
+gen_ppt.py
+main.js

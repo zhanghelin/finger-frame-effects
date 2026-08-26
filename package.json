@@ -1,0 +1,16 @@
+{
+  "name": "finger-frame-effects",
+  "private": true,
+  "version": "1.0.0",
+  "description": "指尖转场 — 手势取景框视频特效工具（录制手势取景框 + 特效编辑 + AI 风格转绘）",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 8000"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "vite": "^5.4.0"
+  }
+}
