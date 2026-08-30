@@ -52,6 +52,12 @@ export class Recorder {
     this.corners = null;
     this.presence = 0;
     this.frameActive = false;
+    // 本次会话是否激活过取景框：掉出激活态后重新进入用中间阈值，避免迟滞死区
+    this.everActivated = false;
+    // 单手张开状态：框无效但恰好有一只手张开（另一只闭合/丢失），用于提示
+    this.singleHandOpen = false;
+    // 双手都在但都未张开的状态，用于提示
+    this.handsAllTight = false;
     this.lostFrames = 0;
     this.jumpFrames = 0;
     this.MAX_LOST_FRAMES = 3;
@@ -136,16 +142,20 @@ export class Recorder {
   static lerpPt(a, b, t) { return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }; }
 
   computeQuad(hands) {
-    const info = hands.map((lm) => ({
-      index: this.toPixel(lm[INDEX_TIP]),
-      thumb: this.toPixel(lm[THUMB_TIP]),
-      wristX: this.toPixel(lm[WRIST]).x,
-      scale: Recorder.dist(this.toPixel(lm[WRIST]), this.toPixel(lm[MIDDLE_MCP])) + 1,
-    }));
-    const needed = this.frameActive ? 0.35 : 0.75;
-    for (const hd of info) {
-      if (Recorder.dist(hd.thumb, hd.index) < hd.scale * needed) return null;
-    }
+    const info = hands.map((lm) => {
+      const index = this.toPixel(lm[INDEX_TIP]);
+      const thumb = this.toPixel(lm[THUMB_TIP]);
+      const wrist = this.toPixel(lm[WRIST]);
+      const scale = Recorder.dist(wrist, this.toPixel(lm[MIDDLE_MCP])) + 1;
+      return { index, thumb, wristX: wrist.x, scale, openness: Recorder.dist(thumb, index) / scale };
+    });
+    // 张开门槛：至少一只手达到阈值才生效。
+    // 进入：首次 0.75 严格防误触发，掉出后重进 0.5；保持中 0.35。
+    // 保持中也必须检查：双手都收起（握拳）时，即使指尖检测误差让
+    // 4 点面积不为零，也要判定无框（收手=结束取景）；
+    // 而一开一合时张开的那只手满足 0.35，三角形中间形态照常保留。
+    const needed = this.frameActive ? 0.35 : (this.everActivated ? 0.5 : 0.75);
+    if (!info.some((hd) => hd.openness >= needed)) return null;
     info.sort((a, b) => a.wristX - b.wristX);
     const [A, B] = info;
     const pts = [A.index, B.index, B.thumb, A.thumb];
@@ -154,7 +164,7 @@ export class Recorder {
     const hull = [...pts].sort(
       (a, b) => Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx)
     );
-    const minArea = this.frameActive ? 0.0005 : 0.005;
+    const minArea = this.frameActive ? 0.0005 : (this.everActivated ? 0.0015 : 0.005);
     if (this.polygonArea(hull) < this.rawCanvas.width * this.rawCanvas.height * minArea) return null;
     return pts;
   }
@@ -181,6 +191,7 @@ export class Recorder {
       if (!this.corners) {
         this.lostFrames = 0;
         this.frameActive = true;
+        this.everActivated = true;
         this.jumpFrames = 0;
         this.corners = targetQuad;
         this.presence = Math.min(1, this.presence + 0.12);
@@ -263,8 +274,20 @@ export class Recorder {
     }
     if (detectionUpdated) {
       let targetQuad = null;
-      if (this.lastResults?.landmarks?.length === 2) {
-        targetQuad = this.computeQuad(this.lastResults.landmarks);
+      const lms = this.lastResults?.landmarks;
+      if (lms?.length === 2) {
+        targetQuad = this.computeQuad(lms);
+      }
+      // 单手张开判定：框无效但恰好只有一只手在画面且张开，提示用户需要双手
+      this.singleHandOpen = false;
+      this.handsAllTight = false;
+      if (!targetQuad && lms?.length >= 1) {
+        const openHands = lms.filter((lm) => {
+          const scale = Recorder.dist(this.toPixel(lm[WRIST]), this.toPixel(lm[MIDDLE_MCP])) + 1;
+          return Recorder.dist(this.toPixel(lm[THUMB_TIP]), this.toPixel(lm[INDEX_TIP])) >= scale * 0.35;
+        }).length;
+        this.singleHandOpen = lms.length === 1 && openHands === 1;
+        this.handsAllTight = lms.length === 2 && openHands === 0;
       }
       this.smoothQuad(targetQuad);
       // 录制中：记录精确 quad 时间线（编辑器虚线框/遮罩/扫描的数据源）
@@ -290,7 +313,14 @@ export class Recorder {
       this.drawFrameOutline(this.displayCtx, this.corners);
     }
 
-    if (this.hintEl) this.hintEl.classList.toggle("hidden", this.presence > 0.5);
+    if (this.hintEl) {
+      this.hintEl.classList.toggle("hidden", this.presence > 0.5);
+      // 无框时给出具体引导，避免用户以为检测失效（一开一合时框已出现，无需提示）
+      let msg = "伸出双手，拇指与食指构成取景框";
+      if (this.singleHandOpen) msg = "检测到 1 只手张开 · 另一只手入镜即可构成取景框";
+      else if (this.handsAllTight) msg = "张开拇指与食指开始检测";
+      if (this.hintEl.textContent !== msg) this.hintEl.textContent = msg;
+    }
     requestAnimationFrame(() => this.loop());
   }
 
@@ -385,7 +415,8 @@ export class Recorder {
     // 保存状态
     const sv = {
       corners: this.corners, presence: this.presence, mirrored: this.mirrored,
-      frameActive: this.frameActive, lostFrames: this.lostFrames, jumpFrames: this.jumpFrames,
+      frameActive: this.frameActive, everActivated: this.everActivated,
+      lostFrames: this.lostFrames, jumpFrames: this.jumpFrames,
       lastVideoTime: this.lastVideoTime, rawW: this.rawCanvas.width, rawH: this.rawCanvas.height,
     };
 
@@ -407,7 +438,7 @@ export class Recorder {
 
     // 临时设置处理状态
     this.mirrored = false;
-    this.corners = null; this.presence = 0; this.frameActive = false;
+    this.corners = null; this.presence = 0; this.frameActive = false; this.everActivated = false;
     this.lostFrames = 0; this.jumpFrames = 0; this.lastVideoTime = -1;
     this.rawCanvas.width = w; this.rawCanvas.height = h;
     this.maskTrack = [];
@@ -428,7 +459,8 @@ export class Recorder {
     return new Promise((resolve, reject) => {
       rec.onstop = () => {
         this.corners = sv.corners; this.presence = sv.presence; this.mirrored = sv.mirrored;
-        this.frameActive = sv.frameActive; this.lostFrames = sv.lostFrames; this.jumpFrames = sv.jumpFrames;
+        this.frameActive = sv.frameActive; this.everActivated = sv.everActivated;
+        this.lostFrames = sv.lostFrames; this.jumpFrames = sv.jumpFrames;
         this.lastVideoTime = sv.lastVideoTime;
         this.rawCanvas.width = sv.rawW; this.rawCanvas.height = sv.rawH;
         this.running = wasRunning;
